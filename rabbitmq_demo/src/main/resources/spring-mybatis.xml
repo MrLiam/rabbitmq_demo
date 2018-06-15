@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+	xmlns:p="http://www.springframework.org/schema/p"
+	xmlns:context="http://www.springframework.org/schema/context"
+	xmlns:tx="http://www.springframework.org/schema/tx"
+	xmlns:mvc="http://www.springframework.org/schema/mvc"
+    xmlns:rabbit="http://www.springframework.org/schema/rabbit"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans  
+                        http://www.springframework.org/schema/beans/spring-beans.xsd  
+                        http://www.springframework.org/schema/context  
+                        http://www.springframework.org/schema/context/spring-context.xsd  
+                        http://www.springframework.org/schema/tx   
+     					http://www.springframework.org/schema/tx/spring-tx.xsd
+                        http://www.springframework.org/schema/mvc  
+                        http://www.springframework.org/schema/mvc/spring-mvc.xsd
+                        http://www.springframework.org/schema/rabbit 
+                        http://www.springframework.org/schema/rabbit/spring-rabbit-1.7.xsd">
+	<!-- 自动扫描 -->
+	<context:component-scan base-package="com.smtv" />
+	<!-- 引入配置文件 -->
+	<!-- <bean id="propertyConfigurer"
+		class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
+		<property name="location" value="classpath:jdbc.properties" />
+	</bean> -->
+	<!-- 引入配置文件 -->
+	<bean id="propertyConsfigurer"
+		class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
+		<property name="locations">
+			<list>
+				<value>classpath:jdbc.properties</value>
+				<value>classpath:rabbitmq.properties</value>
+			</list>
+		</property>
+	</bean>
+	
+	<!--简化方式  -->  
+    <!-- <context:property-placeholder location="classpath:jdbc.properties"/> -->
+
+	<bean id="dataSource" class="org.apache.commons.dbcp.BasicDataSource"
+		destroy-method="close">
+		<property name="driverClassName" value="${jdbc.driverClassName}" />
+		<property name="url" value="${jdbc.url}" />
+		<property name="username" value="${jdbc.username}" />
+		<property name="password" value="${jdbc.password}" />
+		<!-- 初始化连接大小 -->
+		<property name="initialSize" value="${initialSize}"></property>
+		<!-- 连接池最大数量 -->
+		<property name="maxActive" value="${maxActive}"></property>
+		<!-- 连接池最大空闲 -->
+		<property name="maxIdle" value="${maxIdle}"></property>
+		<!-- 连接池最小空闲 -->
+		<property name="minIdle" value="${minIdle}"></property>
+		<!-- 获取连接最大等待时间 -->
+		<property name="maxWait" value="${maxWait}"></property>
+		<!-- 保持连接，自动连接，防止连接丢失  -->
+		<property name="validationQuery" value="SELECT 1" />
+    	<property name="testOnBorrow" value="true"/>
+	</bean>
+
+	<!-- spring和MyBatis完美整合，不需要mybatis的配置映射文件 -->
+	<!-- <bean id="sqlSessionFactory" class="org.mybatis.spring.SqlSessionFactoryBean">
+		<property name="dataSource" ref="dataSource" />
+		自动扫描mapping.xml文件
+		<property name="mapperLocations" value="classpath:com/smtv/ynyd/mapping/*.xml"></property>
+	</bean> -->
+
+	<!-- DAO接口所在包名，Spring会自动查找其下的类 -->
+	<bean class="org.mybatis.spring.mapper.MapperScannerConfigurer">
+		<property name="basePackage" value="com.smtv.ynyd.dao" />
+		<property name="sqlSessionFactoryBeanName" value="sqlSessionFactory"></property>
+	</bean>
+
+	<!-- (事务管理)transaction manager, use JtaTransactionManager for global tx -->
+	<bean id="transactionManager"
+		class="org.springframework.jdbc.datasource.DataSourceTransactionManager">
+		<property name="dataSource" ref="dataSource" />
+	</bean>
+	
+	<!-- 开启事务注解 -->
+	<tx:annotation-driven transaction-manager="transactionManager" />
+	
+	<!-- rabbitMQ配置  BEGIN-->
+    <bean id="rabbitConnectionFactory"
+      class="org.springframework.amqp.rabbit.connection.CachingConnectionFactory">
+        <constructor-arg value="${rabbit.hosts}"/>
+        <property name="username" value="${rabbit.username}"/>
+        <property name="password" value="${rabbit.password}"/>
+        <property name="channelCacheSize" value="${rabbit.channelCacheSize}"/>
+        <property name="port" value="${rabbit.port}"></property>
+        <property name="virtualHost" value="${rabbit.virtualHost}"></property>
+    </bean>
+    <rabbit:admin connection-factory="rabbitConnectionFactory"/>
+	
+	<!-- autoDelete:是否自动删除 durable:持久化  -->
+    <rabbit:queue name="test_liam_queue" durable="true"/>
+    <rabbit:queue name="${rabbit.queue}" durable="true"/>
+	<!-- topic主题 -->
+    <rabbit:topic-exchange name="test.liam.topic.exchange" xmlns="http://www.springframework.org/schema/rabbit" durable="true">
+      <bindings>
+        <binding queue="test_liam_queue" pattern="*.liam.queue" />
+      </bindings>
+    </rabbit:topic-exchange>
+    <!-- 绑定交换机和队列 -->
+    <rabbit:direct-exchange name="${rabbit.exchange}" xmlns="http://www.springframework.org/schema/rabbit" durable="true" >
+	    <rabbit:bindings>
+	        <rabbit:binding queue="${rabbit.queue}" key="${rabbit.routingKey}" />
+	    </rabbit:bindings>
+	</rabbit:direct-exchange>
+
+    <!-- 创建rabbitTemplate 消息模板类 -->
+    <bean id="rabbitTemplate" class="org.springframework.amqp.rabbit.core.RabbitTemplate">
+        <constructor-arg ref="rabbitConnectionFactory"></constructor-arg>
+        <!--消息确认回调 -->    
+        <property name="confirmCallback" ref="producer"/>
+    </bean>
+      
+      <bean name="queueListenter" class="com.smtv.rabbitmq.QueueListenter"></bean>  
+      <bean name="producer" class="com.smtv.rabbitmq.RmqProducer"></bean>  
+        
+      <bean id="messageContainer" class="org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer">  
+        <property name="queues" ref="${rabbit.queue}"></property>  
+        <property name="exposeListenerChannel" value="true"></property>  
+        <property name="maxConcurrentConsumers" value="10"></property>  
+        <property name="concurrentConsumers" value="2"></property>  
+        <property name="connectionFactory" ref="rabbitConnectionFactory"></property>  
+        <property name="acknowledgeMode" value="MANUAL"></property>  
+        <property name="messageListener" ref="queueListenter"></property>  
+      </bean>  
+	<!-- rabbitMQ配置  END-->
+	
+	<!-- Spring 异步event需要开启task -->
+    <!-- <import resource="classpath:spring-task.xml"/> -->
+    <!-- Spring 导入shrio相关文件 -->
+    <!-- <import resource="classpath:spring-shiro.xml"/> -->
+
+</beans>
